@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  useRMS, productCost, ORDER_TYPE_LABELS,
+  useRMS, productCost, ORDER_TYPE_LABELS, registerExpectedCash,
 } from '../lib/rmsData'
 import { Stat, Card, Badge, Select, useCurrency } from '../components/ui'
 import {
@@ -80,13 +80,12 @@ export default function Dashboard() {
     const tExp = expenses.filter((e) => isSameDay(new Date(e.date), today)).reduce((sum, e) => sum + e.amount, 0)
     const labor = expenses.filter((e) => e.category === 'Salaries' && isSameDay(new Date(e.date), today)).reduce((sum, e) => sum + e.amount, 0)
     const net = gross - tExp
-    const openSession = s.register_sessions.find((x) => x.status === 'open')
-    const cashOnHand = openSession ? openSession.opening_cash + orders
-      .filter((o) => {
-        const date = orderRevenueDate(o)
-        return date && date >= new Date(openSession.opened_at) && o.payment_status === 'paid'
-      })
-      .reduce((sum, o) => sum + o.payments.filter((p) => p.method === 'Cash').reduce((a, p) => a + p.amount, 0), 0) : 0
+    const openSessions = s.register_sessions.filter((session) => {
+      if (session.status !== 'open') return false
+      if (branchId === 'all') return true
+      return s.cash_registers.find((register) => register.id === session.register_id)?.branch_id === branchId
+    })
+    const cashOnHand = openSessions.reduce((sum, session) => sum + registerExpectedCash(s, session), 0)
     const pending = s.orders.filter((o) => !['completed', 'cancelled', 'refunded'].includes(o.status)).length
 
     return {
@@ -100,7 +99,7 @@ export default function Dashboard() {
       lowStock: s.ingredients.filter((ingredient) => Number(ingredient.quantity) < 5).length,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, expenses, s.products, s.register_sessions])
+  }, [orders, expenses, s.products, s.orders, s.register_sessions, s.cash_registers, s.cash_transactions, branchId])
 
   // Revenue over range
   const revData = useMemo(() => {
@@ -252,7 +251,7 @@ export default function Dashboard() {
         <Stat label="Food Cost %" value={`${kpis.foodCostPct.toFixed(1)}%`} tone={kpis.foodCostPct > 35 ? 'red' : 'green'} />
         <Stat label="Labor Cost %" value={`${kpis.laborPct.toFixed(1)}%`} tone={kpis.laborPct > 30 ? 'orange' : 'gray'} />
         <Stat label="Expenses Today" value={cur(kpis.tExp)} />
-        <Stat label="Cash on Hand" value={cur(kpis.cashOnHand)} tone="green" />
+        <Stat label="Expected Cash on Hand" value={cur(kpis.cashOnHand)} sub="Opening cash + cash sales + cash in − cash out" tone="green" />
         <Stat label="Low Stock Items" value={kpis.lowStock} tone={kpis.lowStock ? 'orange' : 'gray'} />
         <Stat label="Inventory Value" value={cur(s.ingredients.reduce((sum, i) => sum + i.quantity * i.cost_per_unit, 0))} />
       </div>

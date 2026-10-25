@@ -939,21 +939,20 @@ export function openRegister(s, { register_id, cashier, opening_cash }) {
 }
 
 export function registerExpectedCash(s, session) {
-  const cashSales = s.orders.filter((o) => o.payment_status === 'paid' && o.payments.some((p) => p.method === 'Cash'))
-    .reduce((sum, o) => sum + o.payments.filter((p) => p.method === 'Cash').reduce((a, p) => a + p.amount, 0), 0)
+  const register = s.cash_registers.find((item) => item.id === session.register_id)
   const flows = s.cash_transactions.filter((t) => t.session_id === session.id)
-  const cashIn = flows.filter((t) => t.type === 'in').reduce((s2, t) => s2 + t.amount, 0)
-  const cashOut = flows.filter((t) => t.type === 'out').reduce((s2, t) => s2 + t.amount, 0)
+  const cashIn = flows.filter((t) => t.type === 'in').reduce((sum, t) => sum + Number(t.amount || 0), 0)
+  const cashOut = flows.filter((t) => t.type === 'out').reduce((sum, t) => sum + Number(t.amount || 0), 0)
   // approximate: only count cash sales while session was open
   const opened = new Date(session.opened_at).getTime()
   const closed = session.closed_at ? new Date(session.closed_at).getTime() : Date.now()
   const sessionCashSales = s.orders
     .filter((o) => {
       const t = new Date(o.created_at).getTime()
-      return t >= opened && t <= closed && o.payment_status === 'paid'
+      return t >= opened && t <= closed && o.payment_status === 'paid' &&
+        (!register?.branch_id || o.branch_id === register.branch_id)
     })
     .reduce((sum, o) => sum + o.payments.filter((p) => p.method === 'Cash').reduce((a, p) => a + p.amount, 0), 0)
-  void cashSales
   return r2(session.opening_cash + sessionCashSales + cashIn - cashOut)
 }
 
