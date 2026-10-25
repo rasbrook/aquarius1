@@ -3,8 +3,8 @@ import {
   useRMS, update, openRegister, closeRegister, registerExpectedCash,
   logAudit, notify,
 } from '../lib/rmsData'
-import { PageHeader, Card, Badge, Btn, Modal, Field, inputCls, Select, DataTable, useCurrency, toast, Tabs, Stat } from '../components/ui'
-import { Plus, Lock, Unlock, ArrowUpCircle, ArrowDownCircle, Printer, ShieldAlert } from 'lucide-react'
+import { PageHeader, Card, Badge, Btn, Modal, Confirm, Field, inputCls, Select, DataTable, useCurrency, toast, Tabs, Stat } from '../components/ui'
+import { Plus, Lock, Unlock, ArrowUpCircle, ArrowDownCircle, Printer, ShieldAlert, Trash2 } from 'lucide-react'
 
 export default function CashPage() {
   const s = useRMS()
@@ -13,6 +13,7 @@ export default function CashPage() {
   const [openOpen, setOpenOpen] = useState(false)
   const [closeTarget, setCloseTarget] = useState(null)
   const [flowOpen, setFlowOpen] = useState(false)
+  const [removeTarget, setRemoveTarget] = useState(null)
   const [openForm, setOpenForm] = useState({ register_id: '', cashier: '', opening_cash: '200' })
   const [closeForm, setCloseForm] = useState({ actual: '' })
   const [flowForm, setFlowForm] = useState({ type: 'out', amount: '', reason: '', notes: '' })
@@ -24,7 +25,7 @@ export default function CashPage() {
   // cash flow aggregation
   const flows = useMemo(() => {
     const rows = []
-    s.orders.filter((o) => o.payment_status === 'paid').forEach((o) => o.payments.forEach((p) => {
+    s.orders.filter((o) => o.payment_status === 'paid').forEach((o) => o.payments.filter((p) => p.method === 'Cash').forEach((p) => {
       rows.push({ date: o.created_at, kind: 'in', category: `Sales (${p.method})`, amount: p.amount, ref: o.number, user: 'POS' })
     }))
     s.cash_transactions.forEach((t) => rows.push({ date: t.created_at, kind: t.type, category: t.reason, amount: t.amount, ref: t.reference, user: t.user, notes: t.notes }))
@@ -73,6 +74,24 @@ export default function CashPage() {
     setCloseForm({ actual: '' })
   }
 
+  const removeSession = () => {
+    const result = update((st) => {
+      const index = st.register_sessions.findIndex((session) => session.id === removeTarget?.id)
+      if (index < 0) return { error: 'Register session no longer exists' }
+      const [session] = st.register_sessions.splice(index, 1)
+      logAudit(st, {
+        user: 'Manager',
+        action: 'delete',
+        entity: 'register_session',
+        entity_id: session.id,
+        prev: `${session.register_id} / ${session.cashier} / ${session.status}`,
+      })
+    })
+    if (result?.error) { toast(result.error, 'error'); return }
+    setRemoveTarget(null)
+    toast('Register session removed; cash movement records were kept')
+  }
+
   const expectedOf = (ses) => registerExpectedCash(s, ses)
 
   return (
@@ -110,17 +129,32 @@ export default function CashPage() {
                 {ses.approved_by === 'NEEDS_MANAGER_APPROVAL' && <ShieldAlert size={12} className="inline ml-1 text-red-500" />}
               </span>
             ) : '—' },
-            { key: 'actions', label: '', render: (ses) => ses.status === 'open' ? (
-              <Btn size="sm" variant="danger" onClick={() => { setCloseTarget(ses); setCloseForm({ actual: '' }) }}><Lock size={13} /> Close</Btn>
-            ) : (
-              <Btn size="sm" variant="ghost" title="Print closing report" onClick={() => {
-                const w = window.open('', '_blank')
-                if (w) w.document.write(`<pre style="font-family:monospace">END OF SHIFT REPORT\n${regOf(ses.register_id)?.name}\nCashier: ${ses.cashier}\nOpened: ${new Date(ses.opened_at).toLocaleString()}\nClosing: ${ses.closed_at ? new Date(ses.closed_at).toLocaleString() : '-'}\nOpening cash: ${cur(ses.opening_cash)}\nExpected cash: ${cur(ses.expected_cash)}\nActual cash: ${cur(ses.closing_cash)}\nVariance: ${cur(ses.variance)}</pre>`)
-              }}><Printer size={13} /></Btn>
+            { key: 'actions', label: '', render: (ses) => (
+              <div className="flex gap-1">
+                {ses.status === 'open' ? (
+                  <Btn size="sm" variant="danger" onClick={() => { setCloseTarget(ses); setCloseForm({ actual: '' }) }}><Lock size={13} /> Close</Btn>
+                ) : (
+                  <Btn size="sm" variant="ghost" title="Print closing report" onClick={() => {
+                    const w = window.open('', '_blank')
+                    if (w) w.document.write(`<pre style="font-family:monospace">END OF SHIFT REPORT\n${regOf(ses.register_id)?.name}\nCashier: ${ses.cashier}\nOpened: ${new Date(ses.opened_at).toLocaleString()}\nClosing: ${ses.closed_at ? new Date(ses.closed_at).toLocaleString() : '-'}\nOpening cash: ${cur(ses.opening_cash)}\nExpected cash: ${cur(ses.expected_cash)}\nActual cash: ${cur(ses.closing_cash)}\nVariance: ${cur(ses.variance)}</pre>`)
+                  }}><Printer size={13} /></Btn>
+                )}
+                <Btn size="sm" variant="ghost" title="Remove register session" aria-label={`Remove register session for ${ses.cashier}`} onClick={() => setRemoveTarget(ses)}>
+                  <Trash2 size={14} />
+                </Btn>
+              </div>
             ) },
           ]} rows={sessions} />
         </Card>
       )}
+
+      <Confirm
+        open={!!removeTarget}
+        onClose={() => setRemoveTarget(null)}
+        onConfirm={removeSession}
+        title="Remove register session?"
+        message={`Remove the register session for ${removeTarget?.cashier || 'this cashier'}? This cannot be undone. Cash movement records will be retained.`}
+      />
 
       {tab === 'flows' && (
         <Card pad={false}>

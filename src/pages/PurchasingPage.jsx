@@ -55,7 +55,37 @@ export default function PurchasingPage() {
       if (!x) return { error: 'Purchase order no longer exists' }
       if (action === 'send') x.status = 'sent'
       if (action === 'approve') x.status = 'approved'
-      if (action === 'pay') { x.payment_status = 'paid'; x.status = x.status === 'received' ? 'paid' : x.status }
+      if (action === 'pay') {
+        if (x.status !== 'received' || x.payment_status === 'paid') return { error: 'This purchase order cannot be paid' }
+        if (st.cash_transactions.some((transaction) => transaction.purchase_order_id === x.id)) {
+          return { error: 'A cash movement has already been recorded for this purchase order' }
+        }
+
+        const amount = Number(x.total)
+        if (!Number.isFinite(amount) || amount < 0) return { error: 'Purchase order total is invalid' }
+
+        if (amount > 0) {
+          const openSession = st.register_sessions.find((session) =>
+            session.status === 'open' &&
+            st.cash_registers.find((register) => register.id === session.register_id)?.branch_id === x.branch_id
+          ) || st.register_sessions.find((session) => session.status === 'open')
+          const supplier = st.suppliers.find((item) => item.id === x.supplier_id)
+          st.cash_transactions.unshift({
+            id: `ct_${Math.random().toString(36).slice(2, 9)}`,
+            session_id: openSession?.id || null,
+            type: 'out',
+            amount: Math.round(amount * 100) / 100,
+            reason: 'Supplier payment',
+            reference: x.number,
+            purchase_order_id: x.id,
+            notes: `Purchase from ${supplier?.name || 'supplier'}`,
+            user: 'Purchasing',
+            created_at: new Date().toISOString(),
+          })
+        }
+        x.payment_status = 'paid'
+        x.status = 'paid'
+      }
       if (action === 'receive') {
         const receipt = receivePurchaseOrder(st, po.id, { user: 'Purchasing' })
         if (receipt.error) return receipt
@@ -63,7 +93,7 @@ export default function PurchasingPage() {
       logAudit(st, { user: 'Purchasing', action, entity: 'purchase_order', entity_id: po.number })
     })
     if (result?.error) { toast(result.error, 'error'); return }
-    toast(`PO ${po.number} ${action === 'pay' ? 'marked paid' : action + 'ed'}`)
+    toast(action === 'pay' ? `PO ${po.number} paid and cash movement recorded` : `PO ${po.number} ${action}ed`)
   }
 
   return (
