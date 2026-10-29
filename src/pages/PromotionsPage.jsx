@@ -13,6 +13,7 @@ export default function PromotionsPage() {
     id: null, name: '', type: 'percentage', value: 10, scope: 'order',
     product_ids: [], category_ids: [], code: '', start: new Date().toISOString().slice(0, 10),
     end: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10), active: true, times_redeemed: 0,
+    max_redemptions: '', single_use_per_customer: false, daypart_start: '', daypart_end: '',
   })
 
   const save = () => {
@@ -91,8 +92,12 @@ export default function PromotionsPage() {
               </Field>
             )}
             <Field label="Coupon code (optional)"><input className={inputCls} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))} /></Field>
+            <Field label="Maximum redemptions"><input type="number" min="1" className={inputCls} value={form.max_redemptions || ''} onChange={(e) => setForm((f) => ({ ...f, max_redemptions: e.target.value ? Number(e.target.value) : '' }))} placeholder="No limit" /></Field>
+            <Field label="Single-use per customer"><Select value={String(Boolean(form.single_use_per_customer))} onChange={(value) => setForm((f) => ({ ...f, single_use_per_customer: value === 'true' }))} options={[{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }]} /></Field>
             <Field label="Start date"><input type="date" className={inputCls} value={form.start?.slice(0, 10)} onChange={(e) => setForm((f) => ({ ...f, start: e.target.value }))} /></Field>
             <Field label="End date"><input type="date" className={inputCls} value={form.end?.slice(0, 10)} onChange={(e) => setForm((f) => ({ ...f, end: e.target.value }))} /></Field>
+            <Field label="Happy hour starts"><input type="time" className={inputCls} value={form.daypart_start || ''} onChange={(e) => setForm((f) => ({ ...f, daypart_start: e.target.value }))} /></Field>
+            <Field label="Happy hour ends"><input type="time" className={inputCls} value={form.daypart_end || ''} onChange={(e) => setForm((f) => ({ ...f, daypart_end: e.target.value }))} /></Field>
           </div>
         )}
       </Modal>

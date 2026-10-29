@@ -4,10 +4,10 @@ import {
   cancelOrder, ORDER_TYPE_LABELS,
 } from '../lib/rmsData'
 import { Btn, Modal, Field, inputCls, Select, toast, SearchInput, useDebounce, useCurrency } from '../components/ui'
-import { Plus, Minus, Trash2, Pause, RotateCcw, Printer, ChefHat, X, Tag, User } from 'lucide-react'
+import { Plus, Minus, Trash2, Pause, RotateCcw, Printer, ChefHat, X, Tag, User, Sparkles } from 'lucide-react'
 
 const TYPES = ['dine_in', 'takeaway', 'delivery', 'pickup']
-const METHODS = ['Cash', 'Card', 'Mobile Money', 'Bank Transfer']
+const METHODS = ['Cash', 'Card', 'Mobile Money', 'Bank Transfer', 'Gift Card']
 
 function emptyCart() {
   return { items: [], type: 'dine_in', table_id: '', customer_id: '', waiter_id: '', notes: '', discount_code: '', discount: 0, editingId: null }
@@ -24,7 +24,7 @@ export default function PosPage() {
   const [paymentOrderId, setPaymentOrderId] = useState(null)
   const [modifierTarget, setModifierTarget] = useState(null)
   const [heldOpen, setHeldOpen] = useState(false)
-  const [payForm, setPayForm] = useState({ method: 'Cash', amount: '', method2: '', amount2: '', tip: 0 })
+  const [payForm, setPayForm] = useState({ method: 'Cash', amount: '', method2: '', amount2: '', giftCardCode: '', giftCardCode2: '', tip: 0 })
 
   const products = useMemo(() => {
     let list = s.products.filter((p) => p.available)
@@ -34,6 +34,11 @@ export default function PosPage() {
   }, [s.products, catFilter, dq])
 
   const totals = computeTotals(s, { items: cart.items, discount: cart.discount, discount_code: cart.discount_code })
+  const matchedUpsells = [...new Set((s.upsell_rules || [])
+    .filter((rule) => rule.active && cart.items.some((item) => item.product_id === rule.trigger_product_id) && !cart.items.some((item) => item.product_id === rule.suggested_product_id))
+    .map((rule) => rule.suggested_product_id))]
+    .map((productId) => s.products.find((product) => product.id === productId))
+    .filter(Boolean)
   const paymentOrder = s.orders.find((order) => order.id === paymentOrderId)
   const paymentOrderDue = paymentOrder
     ? Math.max(0, Number(paymentOrder.total || 0) + Number(paymentOrder.tip || 0) - (paymentOrder.payments || []).reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0))
@@ -68,10 +73,25 @@ export default function PosPage() {
 
   // ---------- coupons ----------
   const applyCoupon = (code) => {
-    const promo = s.promotions.find((p) => p.active && p.code.toLowerCase() === code.toLowerCase())
+    const normalizedCode = code.trim().toLowerCase()
+    if (!normalizedCode) { toast('Enter a coupon code', 'error'); return }
+    const promo = s.promotions.find((p) => p.active && (p.code || '').toLowerCase() === normalizedCode)
     const now = Date.now()
     if (!promo) { toast('Invalid coupon code', 'error'); return }
     if (new Date(promo.start) > now || new Date(promo.end) < now) { toast('Coupon expired or not started', 'error'); return }
+    const completedRedemptions = (s.promotion_redemptions || []).filter((item) => item.promotion_id === promo.id)
+    if (promo.max_redemptions && completedRedemptions.length >= Number(promo.max_redemptions)) { toast('This coupon has reached its redemption limit', 'error'); return }
+    if (promo.single_use_per_customer) {
+      if (!cart.customer_id) { toast('Select a customer to use this single-use coupon', 'error'); return }
+      if (completedRedemptions.some((item) => item.customer_id === cart.customer_id)) { toast('This customer has already used the coupon', 'error'); return }
+    }
+    if (promo.daypart_start && promo.daypart_end) {
+      const currentTime = new Date().toTimeString().slice(0, 5)
+      const withinDaypart = promo.daypart_start <= promo.daypart_end
+        ? currentTime >= promo.daypart_start && currentTime <= promo.daypart_end
+        : currentTime >= promo.daypart_start || currentTime <= promo.daypart_end
+      if (!withinDaypart) { toast(`This offer is available ${promo.daypart_start}–${promo.daypart_end}`, 'error'); return }
+    }
     const t = computeTotals(s, { items: cart.items })
     let discount = 0
     if (promo.scope === 'order') discount = promo.type === 'percentage' ? (t.subtotal * promo.value) / 100 : promo.value
@@ -154,7 +174,7 @@ export default function PosPage() {
 
   const openReadyOrderPayment = (order) => {
     setPaymentOrderId(order.id)
-    setPayForm({ method: 'Cash', amount: '', method2: '', amount2: '', tip: 0 })
+    setPayForm({ method: 'Cash', amount: '', method2: '', amount2: '', giftCardCode: '', giftCardCode2: '', tip: 0 })
     setPayOpen(true)
   }
 
@@ -164,7 +184,7 @@ export default function PosPage() {
     if (!validate()) return
     if (cart.discount > 0 && !cart.discount_code) { /* manual discount allowed */ }
     setPaymentOrderId(null)
-    setPayForm({ method: 'Cash', amount: '', method2: '', amount2: '', tip: 0 })
+    setPayForm({ method: 'Cash', amount: '', method2: '', amount2: '', giftCardCode: '', giftCardCode2: '', tip: 0 })
     setPayOpen(true)
   }
 
@@ -184,10 +204,16 @@ export default function PosPage() {
     if (!Number.isFinite(enteredFirst) || enteredFirst < 0) { toast('Enter a valid payment amount', 'error'); return }
     const firstAmount = Math.min(enteredFirst, total)
     if (firstAmount > 0) {
+      const giftCard = payForm.method === 'Gift Card'
+        ? s.gift_cards?.find((card) => card.code.toLowerCase() === payForm.giftCardCode.trim().toLowerCase())
+        : null
+      if (payForm.method === 'Gift Card' && (!giftCard || Number(giftCard.balance) < firstAmount || (giftCard.expires_at && new Date(`${giftCard.expires_at}T23:59:59`) < new Date()))) {
+        toast('Enter a valid gift-card code with enough available balance', 'error'); return
+      }
       if (payForm.method === 'Cash' && s.settings.pos.require_register_for_cash && !openSession) {
         toast('Cash register must be opened before accepting cash', 'error'); return
       }
-      payments.push({ method: payForm.method, amount: firstAmount, reference: `PAY-${Date.now().toString().slice(-6)}` })
+      payments.push({ method: payForm.method, amount: firstAmount, gift_card_code: giftCard?.code || '', reference: `PAY-${Date.now().toString().slice(-6)}` })
     }
     const remaining = Math.round((total - firstAmount) * 100) / 100
     if (remaining > 0.009) {
@@ -198,7 +224,13 @@ export default function PosPage() {
       if (payForm.method2 === 'Cash' && s.settings.pos.require_register_for_cash && !openSession) {
         toast('Cash register must be opened before accepting cash', 'error'); return
       }
-      payments.push({ method: payForm.method2, amount: remaining, reference: `PAY-${Date.now().toString().slice(-6)}S` })
+      const giftCard2 = payForm.method2 === 'Gift Card'
+        ? s.gift_cards?.find((card) => card.code.toLowerCase() === payForm.giftCardCode2.trim().toLowerCase())
+        : null
+      if (payForm.method2 === 'Gift Card' && (!giftCard2 || Number(giftCard2.balance) < remaining || (giftCard2.expires_at && new Date(`${giftCard2.expires_at}T23:59:59`) < new Date()))) {
+        toast('Enter a valid second gift-card code with enough available balance', 'error'); return
+      }
+      payments.push({ method: payForm.method2, amount: remaining, gift_card_code: giftCard2?.code || '', reference: `PAY-${Date.now().toString().slice(-6)}S` })
     }
     // finalize: send to kitchen if new, mark paid, complete
     const result = update((st) => {
@@ -365,6 +397,19 @@ export default function PosPage() {
             </div>
           ))}
           {!cart.items.length && <p className="text-sm text-gray-400 text-center py-8">Cart is empty — tap products to add</p>}
+          {matchedUpsells.length > 0 && (
+            <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 p-3">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-800"><Sparkles size={13} /> Suggested add-ons</p>
+              <div className="space-y-1.5">
+                {matchedUpsells.map((product) => (
+                  <button key={product.id} onClick={() => addProduct(product)} className="flex w-full items-center justify-between gap-2 rounded-md bg-white px-2.5 py-2 text-left text-xs hover:bg-emerald-50">
+                    <span className="truncate font-medium text-gray-800">{product.name}</span>
+                    <span className="shrink-0 text-emerald-700">{cur(product.price)} <Plus size={12} className="inline" /></span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="p-4 border-t border-gray-100 space-y-3">
@@ -462,6 +507,7 @@ export default function PosPage() {
             <Field label={`Amount (${payForm.method})`} hint="Leave empty to pay full amount">
               <input type="number" min="0" step="0.01" value={payForm.amount} onChange={(e) => setPayForm((f) => ({ ...f, amount: e.target.value }))} className={inputCls} />
             </Field>
+            {payForm.method === 'Gift Card' && <Field label="Gift-card code"><input className={inputCls} value={payForm.giftCardCode} onChange={(e) => setPayForm((f) => ({ ...f, giftCardCode: e.target.value.toUpperCase() }))} placeholder="GIFT-XXXXXX" /></Field>}
             <Field label="Second method (split payment)">
               <Select value={payForm.method2} onChange={(v) => setPayForm((f) => ({ ...f, method2: v }))}
                 options={[{ value: '', label: 'None' }, ...METHODS.filter((m) => m !== payForm.method).map((m) => ({ value: m, label: m }))]} />
@@ -469,6 +515,7 @@ export default function PosPage() {
             <Field label="Amount (second)">
               <input type="number" min="0" step="0.01" value={payForm.amount2} onChange={(e) => setPayForm((f) => ({ ...f, amount2: e.target.value }))} className={inputCls} disabled={!payForm.method2} />
             </Field>
+            {payForm.method2 === 'Gift Card' && <Field label="Second gift-card code"><input className={inputCls} value={payForm.giftCardCode2} onChange={(e) => setPayForm((f) => ({ ...f, giftCardCode2: e.target.value.toUpperCase() }))} placeholder="GIFT-XXXXXX" /></Field>}
             <Field label="Tip">
               <input type="number" min="0" step="0.01" value={payForm.tip} onChange={(e) => setPayForm((f) => ({ ...f, tip: e.target.value }))} className={inputCls} />
             </Field>

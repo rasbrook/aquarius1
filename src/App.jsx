@@ -29,11 +29,15 @@ import BranchesPage from './pages/BranchesPage'
 import NotificationsPage from './pages/NotificationsPage'
 import AuditPage from './pages/AuditPage'
 import TaxCalculatorPage from './pages/TaxCalculatorPage'
+import DebtPage from './pages/DebtPage'
+import MarketingPage from './pages/MarketingPage'
+import DirectOrderPage from './pages/DirectOrderPage'
 
 function App() {
   return (
     <Routes>
       <Route path="/auth" element={<AuthPage />} />
+      <Route path="/order" element={<DirectOrderPage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
           <Route path="/dashboard" element={<Dashboard />} />
@@ -50,11 +54,13 @@ function App() {
           <Route path="/employees" element={<EmployeesPage />} />
           <Route path="/cash" element={<CashPage />} />
           <Route path="/expenses" element={<ExpensesPage />} />
+          <Route path="/debts" element={<DebtPage />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/reports" element={<SalesReportsPage />} />
           <Route path="/pnl" element={<PnlPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/tax-calculator" element={<TaxCalculatorPage />} />
+          <Route path="/marketing" element={<MarketingPage />} />
           <Route path="/promotions" element={<PromotionsPage />} />
           <Route path="/branches" element={<BranchesPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />

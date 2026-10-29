@@ -40,7 +40,13 @@ function createEmptyState() {
         require_register_for_cash: true, allow_credit: false, large_variance_threshold: 20,
       },
       inventory: { low_stock_threshold: 1, costing_method: 'FIFO', waste_pct_alert: 5 },
-      loyalty: { enabled: true, points_per_currency: 1, redemption_rate: 0.05, min_redemption: 100 },
+      loyalty: { enabled: true, points_per_currency: 1, redemption_rate: 0.05, min_redemption: 100, vip_min_spend: 1000000, vip_min_visits: 20 },
+      marketing: {
+        punch_card: { enabled: false, visits_to_reward: 10, reward_description: '' },
+        direct_ordering: { enabled: false, url: '' },
+        reviews: { enabled: false, delay_hours: 2, minimum_rating: 4, google_url: '', yelp_url: '' },
+        wifi: { enabled: false, capture_email: true, capture_phone: false, portal_url: '' },
+      },
       notifications: { email: false, in_app: true, low_stock_alerts: true },
       demo_seeded_at: null,
     },
@@ -61,8 +67,19 @@ function createEmptyState() {
     employees: [],
     attendance: [],
     expenses: [],
+    debts: [
+      { id: 'debt_bank', name: 'Bank debt', type: 'Bank loan', creditor: 'Bank', original_amount: 3000000, balance: 3000000, interest_rate: '', due_date: '', created_at: new Date().toISOString().slice(0, 10), payments: [] },
+      { id: 'debt_rent', name: 'Rental debt', type: 'Rent arrears', creditor: 'Landlord', original_amount: 5000000, balance: 5000000, interest_rate: '', due_date: '', created_at: new Date().toISOString().slice(0, 10), payments: [] },
+    ],
     taxes: [],
     promotions: [],
+    loyalty_transactions: [],
+    promotion_redemptions: [],
+    review_requests: [],
+    marketing_campaigns: [],
+    upsell_rules: [],
+    gift_cards: [],
+    guest_feedback: [],
     orders: [],
     cash_registers: [],
     register_sessions: [],
@@ -630,6 +647,14 @@ function normalizeState(value) {
       pos: { ...defaults.settings.pos, ...value.settings?.pos },
       inventory: { ...defaults.settings.inventory, ...value.settings?.inventory },
       loyalty: { ...defaults.settings.loyalty, ...value.settings?.loyalty },
+      marketing: {
+        ...defaults.settings.marketing,
+        ...value.settings?.marketing,
+        punch_card: { ...defaults.settings.marketing.punch_card, ...value.settings?.marketing?.punch_card },
+        direct_ordering: { ...defaults.settings.marketing.direct_ordering, ...value.settings?.marketing?.direct_ordering },
+        reviews: { ...defaults.settings.marketing.reviews, ...value.settings?.marketing?.reviews },
+        wifi: { ...defaults.settings.marketing.wifi, ...value.settings?.marketing?.wifi },
+      },
       notifications: { ...defaults.settings.notifications, ...value.settings?.notifications },
     },
     seq: { ...defaults.seq, ...value.seq },
@@ -880,6 +905,20 @@ export function completeOrder(s, order, { user = 'POS', applyLoyalty = true } = 
   if (!o) return { error: 'Order not found' }
   if (o.payment_status !== 'paid' && !s.settings.pos.allow_credit) return { error: 'Order cannot be completed without payment' }
   if (o.status === 'completed') return { error: 'Order already completed' }
+  const giftCardPayments = (o.payments || []).filter((payment) => payment.method === 'Gift Card')
+  for (const payment of giftCardPayments) {
+    const card = (s.gift_cards || []).find((item) => item.code.toLowerCase() === (payment.gift_card_code || '').toLowerCase())
+    if (!card || Number(card.balance) < Number(payment.amount) || (card.expires_at && new Date(`${card.expires_at}T23:59:59`) < new Date())) {
+      return { error: 'Gift card is invalid, expired, or has insufficient balance' }
+    }
+  }
+  giftCardPayments.forEach((payment) => {
+    const card = s.gift_cards.find((item) => item.code.toLowerCase() === payment.gift_card_code.toLowerCase())
+    card.balance = Math.max(0, Number(card.balance) - Number(payment.amount))
+    card.redemptions = card.redemptions || []
+    card.redemptions.unshift({ id: uid('gcr'), order_id: o.id, amount: Number(payment.amount), date: new Date().toISOString() })
+    logAudit(s, { user, action: 'redeem', entity: 'gift_card', entity_id: card.code, new: fmt(card.balance, s.settings.restaurant.currency) })
+  })
   o.status = 'completed'
   o.completed_at = new Date().toISOString()
   o.completed_by = user
@@ -902,7 +941,43 @@ export function completeOrder(s, order, { user = 'POS', applyLoyalty = true } = 
       c.total_spent = r2(c.total_spent + o.total)
       c.visits += 1
       c.last_visit = o.completed_at
-      if (s.settings.loyalty.enabled && applyLoyalty) c.points += Math.floor(o.total * s.settings.loyalty.points_per_currency)
+      if (s.settings.loyalty.enabled && applyLoyalty) {
+        const pointsEarned = Math.floor(o.total * s.settings.loyalty.points_per_currency)
+        c.points += pointsEarned
+        if (pointsEarned > 0) {
+          s.loyalty_transactions = s.loyalty_transactions || []
+          s.loyalty_transactions.unshift({ id: uid('lt'), customer_id: c.id, points: pointsEarned, value: 0, note: `Earned on ${o.number}`, created_at: o.completed_at })
+        }
+      }
+      const loyalty = s.settings.loyalty
+      c.segment = c.total_spent >= Number(loyalty.vip_min_spend || Infinity) || c.visits >= Number(loyalty.vip_min_visits || Infinity)
+        ? 'VIP'
+        : c.visits >= 10 ? 'Frequent' : 'Regular'
+      const punchCard = s.settings.marketing?.punch_card
+      if (punchCard?.enabled) {
+        const punchesPerReward = Math.max(1, Number(punchCard.visits_to_reward) || 10)
+        const punchTotal = (Number(c.punch_count) || 0) + 1
+        c.punch_rewards_earned = (Number(c.punch_rewards_earned) || 0) + Math.floor(punchTotal / punchesPerReward)
+        c.punch_count = punchTotal % punchesPerReward
+      }
+      if (s.settings.marketing?.reviews?.enabled && (c.phone || c.email)) {
+        s.review_requests = s.review_requests || []
+        const delayHours = Math.max(0, Number(s.settings.marketing.reviews.delay_hours) || 0)
+        s.review_requests.unshift({
+          id: uid('review'), customer_id: c.id, order_id: o.id,
+          channel: c.phone ? 'SMS' : 'Email', status: 'queued', trigger: 'post_visit',
+          created_at: o.completed_at,
+          scheduled_at: new Date(new Date(o.completed_at).getTime() + delayHours * 3600000).toISOString(),
+        })
+      }
+    }
+  }
+  if (o.discount_code) {
+    const promo = s.promotions.find((item) => item.code && item.code.toLowerCase() === o.discount_code.toLowerCase())
+    if (promo) {
+      promo.times_redeemed = (Number(promo.times_redeemed) || 0) + 1
+      s.promotion_redemptions = s.promotion_redemptions || []
+      s.promotion_redemptions.unshift({ id: uid('pr'), promotion_id: promo.id, customer_id: o.customer_id || null, order_id: o.id, discount: Number(o.discount) || 0, total: Number(o.total) || 0, created_at: o.completed_at })
     }
   }
   // release table

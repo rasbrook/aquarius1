@@ -37,7 +37,7 @@ export default function CustomersPage() {
   const ordersOf = (c) => s.orders.filter((o) => o.customer_id === c.id && o.status === 'completed')
   const avgAOV = customers.length ? customers.reduce((sum, c) => sum + c.total_spent, 0) / customers.length : 0
 
-  const openEdit = (c) => { setForm(c ? { ...c } : { id: null, name: '', phone: '', email: '', birthday: '', address: '', points: 0, segment: 'New' }); setEditOpen(true) }
+  const openEdit = (c) => { setForm(c ? { dietary_preferences: '', anniversary: '', sms_marketing_consent: false, email_marketing_consent: false, ...c } : { id: null, name: '', phone: '', email: '', birthday: '', anniversary: '', dietary_preferences: '', sms_marketing_consent: false, email_marketing_consent: false, address: '', points: 0, segment: 'New' }); setEditOpen(true) }
 
   const save = () => {
     if (!form.name) { toast('Name required', 'error'); return }
@@ -66,6 +66,20 @@ export default function CustomersPage() {
     setRedeemOpen(false)
     setRedeem({ customer_id: '', points: '' })
     toast(`${pts} points redeemed for ${cur(pts * loy.redemption_rate)}`)
+  }
+
+  const redeemPunchReward = (customer) => {
+    if (!customer.punch_rewards_earned) { toast('No punch-card reward is available', 'error'); return }
+    update((st) => {
+      const current = st.customers.find((item) => item.id === customer.id)
+      if (!current?.punch_rewards_earned) return
+      current.punch_rewards_earned -= 1
+      st.loyalty_transactions = st.loyalty_transactions || []
+      st.loyalty_transactions.unshift({ id: `lt_${Date.now()}`, customer_id: current.id, points: 0, value: 0, note: 'Punch-card reward redeemed', created_at: new Date().toISOString() })
+      logAudit(st, { user: 'Staff', action: 'redeem', entity: 'punch_card', entity_id: current.name })
+    })
+    setView((current) => current ? { ...current, punch_rewards_earned: Math.max(0, current.punch_rewards_earned - 1) } : current)
+    toast('Punch-card reward redeemed')
   }
 
   return (
@@ -149,7 +163,10 @@ export default function CustomersPage() {
 
       {/* Customer detail */}
       <Modal open={!!view} onClose={() => setView(null)} title={view?.name} width="max-w-2xl"
-        footer={view && <Btn onClick={() => { openEdit(view); setView(null) }}>Edit customer</Btn>}>
+        footer={view && <div className="flex flex-wrap gap-2">
+          {view.punch_rewards_earned > 0 && <Btn variant="secondary" onClick={() => redeemPunchReward(view)}>Redeem punch reward ({view.punch_rewards_earned})</Btn>}
+          <Btn onClick={() => { openEdit(view); setView(null) }}>Edit customer</Btn>
+        </div>}>
         {view && (
           <div className="space-y-4">
             <div className="flex gap-2">
@@ -160,6 +177,12 @@ export default function CustomersPage() {
               <Mini label="Phone" value={view.phone} />
               <Mini label="Email" value={view.email || '—'} />
               <Mini label="Birthday" value={view.birthday || '—'} />
+              <Mini label="Anniversary" value={view.anniversary || '—'} />
+              <Mini label="Dietary preferences" value={view.dietary_preferences || '—'} />
+              <Mini label="SMS offers" value={view.sms_marketing_consent ? 'Opted in' : 'Not opted in'} />
+              <Mini label="Email offers" value={view.email_marketing_consent ? 'Opted in' : 'Not opted in'} />
+              <Mini label="Current punch card" value={`${view.punch_count || 0} / ${s.settings.marketing?.punch_card?.visits_to_reward || 10}`} />
+              <Mini label="Punch rewards earned" value={view.punch_rewards_earned || 0} />
               <Mini label="Address" value={view.address || '—'} />
               <Mini label="Total spent" value={cur(view.total_spent)} />
               <Mini label="Avg order value" value={cur(view.visits ? view.total_spent / view.visits : 0)} />
@@ -189,6 +212,10 @@ export default function CustomersPage() {
             <Field label="Phone"><input className={inputCls} value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} /></Field>
             <Field label="Email"><input className={inputCls} value={form.email || ''} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} /></Field>
             <Field label="Birthday"><input type="date" className={inputCls} value={form.birthday || ''} onChange={(e) => setForm((f) => ({ ...f, birthday: e.target.value }))} /></Field>
+            <Field label="Anniversary"><input type="date" className={inputCls} value={form.anniversary || ''} onChange={(e) => setForm((f) => ({ ...f, anniversary: e.target.value }))} /></Field>
+            <Field label="Dietary preferences"><input className={inputCls} value={form.dietary_preferences || ''} onChange={(e) => setForm((f) => ({ ...f, dietary_preferences: e.target.value }))} placeholder="e.g. vegetarian, nut allergy" /></Field>
+            <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={Boolean(form.sms_marketing_consent)} onChange={(e) => setForm((f) => ({ ...f, sms_marketing_consent: e.target.checked }))} /> SMS marketing opt-in</label>
+            <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={Boolean(form.email_marketing_consent)} onChange={(e) => setForm((f) => ({ ...f, email_marketing_consent: e.target.checked }))} /> Email marketing opt-in</label>
             <Field label="Address"><input className={inputCls} value={form.address || ''} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} /></Field>
             <Field label="Segment">
               <Select value={form.segment} onChange={(v) => setForm((f) => ({ ...f, segment: v }))}
